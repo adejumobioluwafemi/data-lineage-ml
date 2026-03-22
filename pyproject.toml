@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "datalineageml"
+version = "0.1.0"
+description = "Lightweight data provenance tracker for ML pipelines"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [{ name = "Oluwafemi Adejumobi", email = "oluwafemip.adejumobi@gmail.com" }]
+requires-python = ">=3.8"
+keywords = ["machine-learning", "data-lineage", "provenance", "mlops", "data-versioning"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+dependencies = []
+
+[project.optional-dependencies]
+viz     = ["networkx>=2.6", "plotly>=5.0"]
+pandas  = ["pandas>=1.3"]
+sklearn = ["scikit-learn>=1.0"]
+all     = ["networkx>=2.6", "plotly>=5.0", "pandas>=1.3", "scikit-learn>=1.0"]
+dev     = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "black>=22.0",
+    "pandas>=1.3",
+    "networkx>=2.6",
+]
+
+[project.urls]
+Homepage      = "https://github.com/adejumobioluwafemi/data-lineage-ml"
+Issues        = "https://github.com/adejumobioluwafemi/data-lineage-ml/issues"
+Documentation = "https://github.com/adejumobioluwafemi/data-lineage-ml#readme"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts   = "-v --tb=short"
+
+[tool.black]
+line-length    = 100
+target-version = ["py38"]
