@@ -1,6 +1,9 @@
 """
 @track decorator — wraps any function to log its inputs, outputs,
 dataset hash, and execution metadata to the lineage store.
+
+Uses the global default store (set via dlm.init()) when no explicit
+store= argument is provided.
 """
 
 import functools
@@ -11,21 +14,21 @@ import uuid
 from datetime import datetime
 from typing import Any, Callable, Optional
 
-from ..storage.sqlite_store import LineageStore
-
 
 def _hash_input(obj: Any) -> str:
     """Produce a stable hash for common ML objects (DataFrames, arrays, dicts)."""
     try:
         import pandas as pd
         if isinstance(obj, pd.DataFrame):
-            return hashlib.md5(pd.util.hash_pandas_object(obj).values).hexdigest()
+            return hashlib.md5(
+                pd.util.hash_pandas_object(obj, index=True).values.tobytes() # type: ignore
+            ).hexdigest()
     except ImportError:
         pass
     try:
-        import numpy as np
+        import numpy as np # type: ignore
         if isinstance(obj, np.ndarray):
-            return hashlib.md5(obj.tobytes()).hexdigest()
+            return hashlib.md5(obj.tobytes()).hexdigest() # type: ignore
     except ImportError:
         pass
     try:
@@ -34,30 +37,55 @@ def _hash_input(obj: Any) -> str:
     except Exception:
         return hashlib.md5(str(obj).encode()).hexdigest()
 
+def _resolve_store(store):
+    """Return the store to use: explicit store > global default > new default."""
+    if store is not None:
+        return store
+    # Import here to avoid circular import at module load time
+    from datalineageml import get_default_store
+    from datalineageml.storage.sqlite_store import LineageStore
+    default = get_default_store()
+    if default is not None:
+        return default
+    # Fallback: create a new store at the default path.
+    # This preserves v0.1 behaviour for scripts that never call dlm.init().
+    return LineageStore()
 
 def track(
     name: Optional[str] = None,
     tags: Optional[dict] = None,
-    store: Optional[LineageStore] = None,
+    store=None,
+    snapshot: bool = False,
+    sensitive_cols: Optional[list] = None,
 ):
-    """
-    Decorator to track a data transformation step.
+    """Decorator to track a data transformation step.
 
-    Usage:
+    Args:
+        name:           Human-readable step name. Defaults to the function name.
+        tags:           Arbitrary key-value metadata stored with the step record.
+        store:          LineageStore to write to. If None, uses the global default
+                        store (set via dlm.init()), or creates a new default store.
+        snapshot:       (v0.2) If True, log a statistical snapshot of DataFrame
+                        arguments before and after the function runs.
+        sensitive_cols: (v0.2) Column names to track demographic distributions for.
+                        Used only when snapshot=True.
+
+    Example:
         @track(name="clean_data", tags={"stage": "preprocessing"})
         def clean_data(df):
             return df.dropna()
 
-        @track()
-        def my_transform(df):
-            ...
+        # Using the global default store (after dlm.init()):
+        @track(name="normalize")
+        def normalize(df):
+            return (df - df.mean()) / df.std()
     """
     def decorator(fn: Callable) -> Callable:
         step_name = name or fn.__name__
 
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
-            _store = store or LineageStore()
+            _store = _resolve_store(store)
             run_id = str(uuid.uuid4())
             started_at = datetime.utcnow().isoformat()
             t0 = time.perf_counter()
@@ -66,6 +94,13 @@ def track(
                 f"arg_{i}": _hash_input(a) for i, a in enumerate(args)
             }
             input_hashes.update({k: _hash_input(v) for k, v in kwargs.items()})
+
+            # v0.2: snapshot before
+            if snapshot:
+                _log_snapshot_safe(
+                    _store, run_id, step_name, "before",
+                    args, kwargs, sensitive_cols or []
+                )
 
             result = None
             output_hash = None
@@ -94,6 +129,76 @@ def track(
                     error=error,
                     tags=tags or {},
                 )
+
+                # v0.2: snapshot after (only on success)
+                if snapshot and status == "success" and result is not None:
+                    _log_snapshot_safe(
+                        _store, run_id, step_name, "after",
+                        [result], {}, sensitive_cols or []
+                    )
+
             return result
         return wrapper
     return decorator
+
+def _log_snapshot_safe(store, run_id, step_name, position,
+                        args, kwargs, sensitive_cols):
+    """Attempt to log a DataFrame snapshot. Fails silently if pandas unavailable."""
+    try:
+        import pandas as pd
+        from datetime import datetime as _dt
+        # Find the first DataFrame argument
+        df = None
+        for a in list(args) + list(kwargs.values()):
+            if isinstance(a, pd.DataFrame):
+                df = a
+                break
+        if df is None:
+            return
+
+        null_rates = {c: round(float(df[c].isna().mean()), 6)
+                      for c in df.columns}
+
+        numeric_stats = {}
+        for c in df.select_dtypes(include="number").columns:
+            s = df[c].dropna()
+            if len(s) == 0:
+                continue
+            numeric_stats[c] = {
+                "mean": round(float(s.mean()), 6),
+                "std":  round(float(s.std()), 6),
+                "min":  round(float(s.min()), 6),
+                "max":  round(float(s.max()), 6),
+                "p25":  round(float(s.quantile(0.25)), 6),
+                "p75":  round(float(s.quantile(0.75)), 6),
+            }
+
+        categorical_stats = {}
+        for c in df.select_dtypes(exclude="number").columns:
+            vc = df[c].value_counts().head(10)
+            categorical_stats[c] = {str(k): int(v) for k, v in vc.items()}
+
+        sensitive_stats = {}
+        for c in sensitive_cols:
+            if c in df.columns:
+                vc = df[c].value_counts(normalize=True)
+                sensitive_stats[c] = {
+                    str(k): round(float(v), 6) for k, v in vc.items()
+                }
+
+        store.log_snapshot(
+            run_id=run_id,
+            step_name=step_name,
+            position=position,
+            row_count=len(df),
+            column_count=len(df.columns),
+            column_names=list(df.columns),
+            null_rates=null_rates,
+            numeric_stats=numeric_stats,
+            categorical_stats=categorical_stats,
+            sensitive_stats=sensitive_stats,
+            recorded_at=_dt.utcnow().isoformat(),
+        )
+    except Exception:
+        # Snapshots are best-effort — never let them break the pipeline
+        pass

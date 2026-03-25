@@ -1,9 +1,9 @@
 """
-Unit tests for LineageContext.
-Run with: pytest tests/unit/test_context.py -v
+Tests for LineageContext.
+Run with: python run_tests.py  OR  pytest tests/unit/test_context.py -v
 """
 
-import pytest
+import pytest # type: ignore
 from datalineageml.trackers.context import LineageContext
 from datalineageml.trackers.decorator import track
 from datalineageml.storage.sqlite_store import LineageStore
@@ -20,7 +20,6 @@ def store(tmp_path):
 def test_context_logs_pipeline_start_and_end(store):
     with LineageContext(name="my_pipeline", store=store):
         pass
-
     pipelines = store.get_pipelines()
     assert len(pipelines) == 1
     assert pipelines[0]["name"] == "my_pipeline"
@@ -32,23 +31,18 @@ def test_context_marks_failed_on_exception(store):
     with pytest.raises(RuntimeError):
         with LineageContext(name="failing_pipeline", store=store):
             raise RuntimeError("pipeline blew up")
-
-    pipelines = store.get_pipelines()
-    assert pipelines[0]["status"] == "failed"
+    assert store.get_pipelines()[0]["status"] == "failed"
 
 
 def test_context_with_tracked_steps(store):
     @track(name="step_one", store=store)
-    def step_one(x):
-        return x + 1
+    def step_one(x): return x + 1
 
     @track(name="step_two", store=store)
-    def step_two(x):
-        return x * 2
+    def step_two(x): return x * 2
 
     with LineageContext(name="full_pipeline", store=store):
-        result = step_one(5)
-        result = step_two(result)
+        result = step_two(step_one(5))
 
     assert result == 12
     steps = store.get_steps()

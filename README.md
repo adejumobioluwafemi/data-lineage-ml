@@ -13,7 +13,7 @@
 
 ## The problem this solves
 
-Your model is biased. Or it started failing after a data update. Or an audit found a fairness gap. You know *what* went wrong — but not *where* in the pipeline it went wrong.
+Your model is biased. Or it started failing after a data update. Or an audit found a fairness gap. You know *what* went wrong, but not *where* in the pipeline it went wrong.
 
 Existing tools answer the wrong question. MLflow, W&B, and LangSmith tell you **what happened** inside a pipeline — inputs, outputs, latencies. They do not tell you **which data transformation caused the outcome you are trying to fix**.
 
