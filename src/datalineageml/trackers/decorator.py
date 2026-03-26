@@ -143,62 +143,30 @@ def track(
 
 def _log_snapshot_safe(store, run_id, step_name, position,
                         args, kwargs, sensitive_cols):
-    """Attempt to log a DataFrame snapshot. Fails silently if pandas unavailable."""
+    """Attempt to log a DataFrame snapshot using DataFrameProfiler.
+ 
+    Fails silently — snapshots must never break a production pipeline.
+    The actual computation is delegated to DataFrameProfiler so the
+    logic lives in one place and can be tested independently.
+    """
     try:
         import pandas as pd
-        from datetime import datetime as _dt
-        # Find the first DataFrame argument
+        from datalineageml.analysis.profiler import DataFrameProfiler
+ 
+        # Find the first DataFrame in the arguments
         df = None
         for a in list(args) + list(kwargs.values()):
             if isinstance(a, pd.DataFrame):
                 df = a
                 break
         if df is None:
-            return
-
-        null_rates = {c: round(float(df[c].isna().mean()), 6)
-                      for c in df.columns}
-
-        numeric_stats = {}
-        for c in df.select_dtypes(include="number").columns:
-            s = df[c].dropna()
-            if len(s) == 0:
-                continue
-            numeric_stats[c] = {
-                "mean": round(float(s.mean()), 6),
-                "std":  round(float(s.std()), 6),
-                "min":  round(float(s.min()), 6),
-                "max":  round(float(s.max()), 6),
-                "p25":  round(float(s.quantile(0.25)), 6),
-                "p75":  round(float(s.quantile(0.75)), 6),
-            }
-
-        categorical_stats = {}
-        for c in df.select_dtypes(exclude="number").columns:
-            vc = df[c].value_counts().head(10)
-            categorical_stats[c] = {str(k): int(v) for k, v in vc.items()}
-
-        sensitive_stats = {}
-        for c in sensitive_cols:
-            if c in df.columns:
-                vc = df[c].value_counts(normalize=True)
-                sensitive_stats[c] = {
-                    str(k): round(float(v), 6) for k, v in vc.items()
-                }
-
-        store.log_snapshot(
-            run_id=run_id,
-            step_name=step_name,
-            position=position,
-            row_count=len(df),
-            column_count=len(df.columns),
-            column_names=list(df.columns),
-            null_rates=null_rates,
-            numeric_stats=numeric_stats,
-            categorical_stats=categorical_stats,
-            sensitive_stats=sensitive_stats,
-            recorded_at=_dt.utcnow().isoformat(),
-        )
+            return  # no DataFrame argument — nothing to snapshot
+ 
+        profiler = DataFrameProfiler(sensitive_cols=sensitive_cols)
+        snapshot = profiler.profile(df, step_name=step_name,
+                                    position=position, run_id=run_id)
+        store.log_snapshot(**snapshot)
+ 
     except Exception:
         # Snapshots are best-effort — never let them break the pipeline
         pass
