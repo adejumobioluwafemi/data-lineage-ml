@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Oyo State Agricultural Subsidy Pipeline — Fairness Audit</title>
+<style>
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+       font-size: 14px; color: #1a1a1a; background: #f5f5f5; line-height: 1.5; }
+.header { background: #1a1a2e; color: white; padding: 2rem 2.5rem 1.5rem;
+          border-bottom: 3px solid #e94560; }
+.logo { font-size: 11px; letter-spacing: 3px; text-transform: uppercase;
+        color: #e94560; margin-bottom: .5rem; }
+h1 { font-size: 1.6rem; font-weight: 600; margin-bottom: .3rem; }
+.sub { color: #aaa; margin-bottom: .2rem; }
+.meta { color: #666; font-size: 12px; }
+.section { background: white; margin: 1rem 2rem; border-radius: 6px;
+           padding: 1.5rem; box-shadow: 0 1px 3px rgba(0,0,0,.08); }
+h2 { font-size: 1rem; font-weight: 600; color: #333;
+     border-bottom: 1px solid #eee; padding-bottom: .5rem; margin-bottom: 1rem; }
+h4 { font-size: .875rem; color: #555; margin: .75rem 0 .4rem; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-weight: 600; color: #555; font-size: 11px;
+     text-transform: uppercase; letter-spacing: .5px;
+     border-bottom: 2px solid #eee; padding: .4rem .5rem; }
+td { padding: .4rem .5rem; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+.badge { display: inline-block; padding: 1px 7px; border-radius: 12px;
+         font-size: 11px; font-weight: 600; }
+.badge.ok   { background: #d1fae5; color: #065f46; }
+.badge.warn { background: #fef3c7; color: #92400e; }
+.badge.fail { background: #fee2e2; color: #991b1b; }
+.mono  { font-family: 'SF Mono', 'Fira Code', monospace; font-size: 12px; }
+.small { font-size: 11px; color: #888; }
+.num   { text-align: right; font-variant-numeric: tabular-nums; }
+pre.rec { background: #f8f8f8; padding: .75rem; border-radius: 4px;
+          font-size: 12px; white-space: pre-wrap; margin-top: .3rem; }
+.finding.high { background: #fff5f5; border-left: 3px solid #ef4444;
+                padding: .75rem 1rem; margin-top: 1rem; border-radius: 0 4px 4px 0; }
+.dist-chart { margin-top: .75rem; }
+.dist-row { display: flex; align-items: center; gap: .5rem; margin: .3rem 0; }
+.dist-label { width: 80px; font-size: 12px; color: #555; flex-shrink: 0; }
+.bar-wrap { display: flex; align-items: center; gap: .3rem; width: 180px; }
+.bar { height: 14px; border-radius: 2px; min-width: 2px; }
+.bar.before { background: #93c5fd; }
+.bar.after  { background: #6ee7b7; }
+.bar-val { font-size: 11px; color: #666; width: 38px; }
+.arrow { color: #aaa; }
+.delta { font-size: 11px; font-weight: 600; width: 48px; }
+.delta.pos { color: #059669; }
+.delta.neg { color: #dc2626; }
+.snap-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+             gap: 1rem; margin-top: .75rem; }
+.snap-card { background: #fafafa; border: 1px solid #e5e7eb;
+             border-radius: 4px; padding: .75rem; }
+.snap-header { display: flex; flex-wrap: wrap; gap: .4rem; align-items: center;
+               margin-bottom: .5rem; font-size: 12px; }
+.dist-single { }
+.dist-row-single { display: flex; align-items: center; gap: .4rem; margin: .2rem 0; }
+.bar-wrap-single { width: 100px; background: #f0f0f0; border-radius: 2px; height: 12px; }
+.bar-single { background: #818cf8; height: 12px; border-radius: 2px; min-width: 2px; }
+.attr-box { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 4px;
+            padding: 1rem; }
+.attr-row { display: flex; gap: 1rem; padding: .3rem 0; border-bottom: 1px solid #f0f0f0; }
+.attr-row:last-of-type { border: none; }
+.attr-label { width: 140px; color: #666; font-size: 12px; flex-shrink: 0; }
+.attr-value { font-size: 13px; }
+.attr-evidence { margin-top: .75rem; font-size: 12px; color: #444; }
+.cf-box { background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 4px;
+          padding: 1rem; }
+.cf-header { display: flex; justify-content: space-between; align-items: center;
+             margin-bottom: .75rem; font-size: 13px; }
+.cf-row-counts { display: flex; gap: 1.5rem; font-size: 12px; color: #555;
+                 margin-bottom: .75rem; }
+.cf-metrics { display: flex; gap: 1.5rem; margin-bottom: .75rem; }
+.cf-metric { text-align: center; background: white; padding: .5rem .75rem;
+             border-radius: 4px; border: 1px solid #e5e7eb; font-size: 12px; }
+.cf-metric strong { display: block; font-size: 1.1rem; margin-top: .1rem; }
+.verdict-detail { font-size: 12px; color: #555; margin-top: .75rem; font-style: italic; }
+.ok-text   { color: #059669; }
+.fail-text { color: #dc2626; }
+.dist-legend { display: flex; gap: 1rem; font-size: 11px; color: #666; margin-bottom: .3rem; }
+.leg.before::first-letter { color: #93c5fd; }
+.leg.after::first-letter  { color: #6ee7b7; }
+.footer { text-align: center; padding: 1.5rem; color: #888;
+          font-size: 12px; margin-top: 1rem; }
+.footer a { color: #6366f1; text-decoration: none; }
+
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">DataLineageML</div>
+  <h1>Oyo State Agricultural Subsidy Pipeline — Fairness Audit</h1>
+  <p class="sub">Pipeline: oyo_subsidy_pipeline_v1_biased</p>
+  <p class="meta">Generated: 2026-03-27T03:32:21 UTC</p>
+</div>
+
+<div class="section">
+  <h2>Pipeline Runs</h2>
+  <table>
+    <thead><tr><th>Name</th><th>Started</th><th>Ended</th><th>Status</th></tr></thead>
+    <tbody><tr>
+          <td>oyo_subsidy_pipeline_v1_biased</td>
+          <td class="mono">2026-03-27T03:26:56</td>
+          <td class="mono">2026-03-27T03:26:59</td>
+          <td><span class="badge ok">success</span></td>
+        </tr></tbody>
+  </table>
+  <h2 style="margin-top:1.5rem">Steps</h2>
+  <table>
+    <thead><tr><th>Step</th><th>Started</th><th>Duration</th><th>Status</th><th>Output hash</th></tr></thead>
+    <tbody><tr>
+          <td>load_farm_data</td>
+          <td class="mono">2026-03-27T03:26:56</td>
+          <td class="num">24.4 ms</td>
+          <td><span class="badge ok">✓ success</span></td>
+          <td class="mono small">fffebda16d41...</td>
+        </tr><tr>
+          <td>clean_data</td>
+          <td class="mono">2026-03-27T03:26:56</td>
+          <td class="num">18.2 ms</td>
+          <td><span class="badge ok">✓ success</span></td>
+          <td class="mono small">72c6b4e53d63...</td>
+        </tr><tr>
+          <td>engineer_features</td>
+          <td class="mono">2026-03-27T03:26:56</td>
+          <td class="num">8.4 ms</td>
+          <td><span class="badge ok">✓ success</span></td>
+          <td class="mono small">7c757c6518a1...</td>
+        </tr><tr>
+          <td>encode_categoricals</td>
+          <td class="mono">2026-03-27T03:26:56</td>
+          <td class="num">3.7 ms</td>
+          <td><span class="badge ok">✓ success</span></td>
+          <td class="mono small">9d1f522a8e26...</td>
+        </tr><tr>
+          <td>normalize_features</td>
+          <td class="mono">2026-03-27T03:26:56</td>
+          <td class="num">4.5 ms</td>
+          <td><span class="badge ok">✓ success</span></td>
+          <td class="mono small">f2363110176f...</td>
+        </tr><tr>
+          <td>train_subsidy_model</td>
+          <td class="mono">2026-03-27T03:26:56</td>
+          <td class="num">3039.9 ms</td>
+          <td><span class="badge ok">✓ success</span></td>
+          <td class="mono small">a7b09a6655e0...</td>
+        </tr><tr>
+          <td>load_farm_data</td>
+          <td class="mono">2026-03-27T03:31:01</td>
+          <td class="num">22.0 ms</td>
+          <td><span class="badge ok">✓ success</span></td>
+          <td class="mono small">fffebda16d41...</td>
+        </tr><tr>
+          <td>clean_data</td>
+          <td class="mono">2026-03-27T03:31:01</td>
+          <td class="num">9.9 ms</td>
+          <td><span class="badge ok">✓ success</span></td>
+          <td class="mono small">72c6b4e53d63...</td>
+        </tr><tr>
+          <td>engineer_features</td>
+          <td class="mono">2026-03-27T03:31:01</td>
+          <td class="num">5.4 ms</td>
+          <td><span class="badge ok">✓ success</span></td>
+          <td class="mono small">7c757c6518a1...</td>
+        </tr><tr>
+          <td>encode_categoricals</td>
+          <td class="mono">2026-03-27T03:31:01</td>
+          <td class="num">2.8 ms</td>
+          <td><span class="badge ok">✓ success</span></td>
+          <td class="mono small">9d1f522a8e26...</td>
+        </tr><tr>
+          <td>normalize_features</td>
+          <td class="mono">2026-03-27T03:31:01</td>
+          <td class="num">3.6 ms</td>
+          <td><span class="badge ok">✓ success</span></td>
+          <td class="mono small">f2363110176f...</td>
+        </tr><tr>
+          <td>load_farm_data</td>
+          <td class="mono">2026-03-27T03:31:01</td>
+          <td class="num">1.8 ms</td>
+          <td><span class="badge ok">✓ success</span></td>
+          <td class="mono small">fffebda16d41...</td>
+        </tr><tr>
+          <td>engineer_features</td>
+          <td class="mono">2026-03-27T03:31:01</td>
+          <td class="num">2.7 ms</td>
+          <td><span class="badge ok">✓ success</span></td>
+          <td class="mono small">3194c51c2e42...</td>
+        </tr><tr>
+          <td>encode_categoricals</td>
+          <td class="mono">2026-03-27T03:31:01</td>
+          <td class="num">2.4 ms</td>
+          <td><span class="badge ok">✓ success</span></td>
+          <td class="mono small">461c2f47ffad...</td>
+        </tr><tr>
+          <td>normalize_features</td>
+          <td class="mono">2026-03-27T03:31:01</td>
+          <td class="num">3.4 ms</td>
+          <td><span class="badge ok">✓ success</span></td>
+          <td class="mono small">de3d34802133...</td>
+        </tr></tbody>
+  </table>
+</div>
+
+<div class="section">
+  <h2>Distribution Shift Report</h2>
+  <table>
+    <thead><tr><th>Step</th><th>Column</th><th>Test</th><th>Stat</th><th>Flag</th><th>Rows removed</th></tr></thead>
+    <tbody><tr>
+          <td>clean_data</td>
+          <td>gender</td>
+          <td class="mono">JSD</td>
+          <td class="num">0.1681</td>
+          <td><span class="badge fail">⚠ HIGH</span></td>
+          <td class="num">361 (72.2%)</td>
+        </tr><tr>
+          <td>clean_data__counterfactual</td>
+          <td>latitude</td>
+          <td class="mono">KS</td>
+          <td class="num">0.1426</td>
+          <td><span class="badge warn">△ MEDIUM</span></td>
+          <td class="num">0 (0.0%)</td>
+        </tr><tr>
+          <td>clean_data</td>
+          <td>farm_size_ha</td>
+          <td class="mono">KS</td>
+          <td class="num">0.1378</td>
+          <td><span class="badge warn">△ MEDIUM</span></td>
+          <td class="num">361 (72.2%)</td>
+        </tr><tr>
+          <td>clean_data__counterfactual</td>
+          <td>longitude</td>
+          <td class="mono">KS</td>
+          <td class="num">0.1171</td>
+          <td><span class="badge warn">△ MEDIUM</span></td>
+          <td class="num">0 (0.0%)</td>
+        </tr><tr>
+          <td>clean_data</td>
+          <td>subsidy_eligible</td>
+          <td class="mono">KS</td>
+          <td class="num">0.1113</td>
+          <td><span class="badge warn">△ MEDIUM</span></td>
+          <td class="num">361 (72.2%)</td>
+        </tr><tr>
+          <td>clean_data</td>
+          <td>crop_yield_t_ha</td>
+          <td class="mono">KS</td>
+          <td class="num">0.1017</td>
+          <td><span class="badge warn">△ MEDIUM</span></td>
+          <td class="num">361 (72.2%)</td>
+        </tr><tr>
+          <td>clean_data</td>
+          <td>longitude</td>
+          <td class="mono">KS</td>
+          <td class="num">0.0519</td>
+          <td><span class="badge ok"> LOW</span></td>
+          <td class="num">361 (72.2%)</td>
+        </tr><tr>
+          <td>clean_data</td>
+          <td>soil_quality</td>
+          <td class="mono">KS</td>
+          <td class="num">0.0514</td>
+          <td><span class="badge ok"> LOW</span></td>
+          <td class="num">361 (72.2%)</td>
+        </tr><tr>
+          <td>clean_data</td>
+          <td>latitude</td>
+          <td class="mono">KS</td>
+          <td class="num">0.0465</td>
+          <td><span class="badge ok"> LOW</span></td>
+          <td class="num">361 (72.2%)</td>
+        </tr><tr>
+          <td>clean_data</td>
+          <td>experience_yrs</td>
+          <td class="mono">KS</td>
+          <td class="num">0.0278</td>
+          <td><span class="badge ok"> LOW</span></td>
+          <td class="num">361 (72.2%)</td>
+        </tr><tr>
+          <td>clean_data__counterfactual</td>
+          <td>gender</td>
+          <td class="mono">JSD</td>
+          <td class="num">0.0000</td>
+          <td><span class="badge ok"> LOW</span></td>
+          <td class="num">0 (0.0%)</td>
+        </tr><tr>
+          <td>clean_data__counterfactual</td>
+          <td>crop_yield_t_ha</td>
+          <td class="mono">KS</td>
+          <td class="num">0.0000</td>
+          <td><span class="badge ok"> LOW</span></td>
+          <td class="num">0 (0.0%)</td>
+        </tr><tr>
+          <td>clean_data__counterfactual</td>
+          <td>experience_yrs</td>
+          <td class="mono">KS</td>
+          <td class="num">0.0000</td>
+          <td><span class="badge ok"> LOW</span></td>
+          <td class="num">0 (0.0%)</td>
+        </tr><tr>
+          <td>clean_data__counterfactual</td>
+          <td>farm_size_ha</td>
+          <td class="mono">KS</td>
+          <td class="num">0.0000</td>
+          <td><span class="badge ok"> LOW</span></td>
+          <td class="num">0 (0.0%)</td>
+        </tr><tr>
+          <td>clean_data__counterfactual</td>
+          <td>soil_quality</td>
+          <td class="mono">KS</td>
+          <td class="num">0.0000</td>
+          <td><span class="badge ok"> LOW</span></td>
+          <td class="num">0 (0.0%)</td>
+        </tr><tr>
+          <td>clean_data__counterfactual</td>
+          <td>subsidy_eligible</td>
+          <td class="mono">KS</td>
+          <td class="num">0.0000</td>
+          <td><span class="badge ok"> LOW</span></td>
+          <td class="num">0 (0.0%)</td>
+        </tr></tbody>
+  </table>
+  
+        <div class="finding high">
+          <strong>[HIGH] clean_data → gender</strong>
+          <p>&#x27;gender&#x27; distribution shifted significantly at &#x27;clean_data&#x27; (JSD = 0.1681, HIGH): &#x27;F&#x27; proportion dropped from 41.4% to 3.6% (361 rows removed, 72.2% of dataset). This step is a candidate causal source of bias.</p>
+          <div class="dist-chart">
+        <div class="dist-row">
+          <span class="dist-label">F</span>
+          <div class="bar-wrap">
+            <div class="bar before" style="width:41.4%"></div>
+            <span class="bar-val">41.4%</span>
+          </div>
+          <span class="arrow">→</span>
+          <div class="bar-wrap">
+            <div class="bar after" style="width:3.6%"></div>
+            <span class="bar-val">3.6%</span>
+          </div>
+          <span class="delta neg">-37.8%</span>
+        </div>
+        <div class="dist-row">
+          <span class="dist-label">M</span>
+          <div class="bar-wrap">
+            <div class="bar before" style="width:58.6%"></div>
+            <span class="bar-val">58.6%</span>
+          </div>
+          <span class="arrow">→</span>
+          <div class="bar-wrap">
+            <div class="bar after" style="width:96.4%"></div>
+            <span class="bar-val">96.4%</span>
+          </div>
+          <span class="delta pos">+37.8%</span>
+        </div></div>
+        </div>
+</div>
+
+<div class="section">
+  <h2>Demographic Snapshots — 'gender'</h2>
+  <div class="snap-grid">
+        <div class="snap-card">
+          <div class="snap-header">
+            <strong>clean_data</strong>
+            <span class="badge ok">before</span>
+            <span class="small mono">2026-03-27T03:26:56</span>
+            <span class="small">500 rows</span>
+          </div>
+          <div class="dist-single">
+        <div class="dist-row-single">
+          <span class="dist-label">M</span>
+          <div class="bar-wrap-single">
+            <div class="bar-single" style="width:58.6%"></div>
+          </div>
+          <span class="bar-val">58.6%</span>
+        </div>
+        <div class="dist-row-single">
+          <span class="dist-label">F</span>
+          <div class="bar-wrap-single">
+            <div class="bar-single" style="width:41.4%"></div>
+          </div>
+          <span class="bar-val">41.4%</span>
+        </div></div>
+        </div>
+        <div class="snap-card">
+          <div class="snap-header">
+            <strong>clean_data</strong>
+            <span class="badge warn">after</span>
+            <span class="small mono">2026-03-27T03:26:56</span>
+            <span class="small">139 rows</span>
+          </div>
+          <div class="dist-single">
+        <div class="dist-row-single">
+          <span class="dist-label">M</span>
+          <div class="bar-wrap-single">
+            <div class="bar-single" style="width:96.4%"></div>
+          </div>
+          <span class="bar-val">96.4%</span>
+        </div>
+        <div class="dist-row-single">
+          <span class="dist-label">F</span>
+          <div class="bar-wrap-single">
+            <div class="bar-single" style="width:3.6%"></div>
+          </div>
+          <span class="bar-val">3.6%</span>
+        </div></div>
+        </div>
+        <div class="snap-card">
+          <div class="snap-header">
+            <strong>clean_data</strong>
+            <span class="badge ok">before</span>
+            <span class="small mono">2026-03-27T03:31:01</span>
+            <span class="small">500 rows</span>
+          </div>
+          <div class="dist-single">
+        <div class="dist-row-single">
+          <span class="dist-label">M</span>
+          <div class="bar-wrap-single">
+            <div class="bar-single" style="width:58.6%"></div>
+          </div>
+          <span class="bar-val">58.6%</span>
+        </div>
+        <div class="dist-row-single">
+          <span class="dist-label">F</span>
+          <div class="bar-wrap-single">
+            <div class="bar-single" style="width:41.4%"></div>
+          </div>
+          <span class="bar-val">41.4%</span>
+        </div></div>
+        </div>
+        <div class="snap-card">
+          <div class="snap-header">
+            <strong>clean_data</strong>
+            <span class="badge warn">after</span>
+            <span class="small mono">2026-03-27T03:31:01</span>
+            <span class="small">139 rows</span>
+          </div>
+          <div class="dist-single">
+        <div class="dist-row-single">
+          <span class="dist-label">M</span>
+          <div class="bar-wrap-single">
+            <div class="bar-single" style="width:96.4%"></div>
+          </div>
+          <span class="bar-val">96.4%</span>
+        </div>
+        <div class="dist-row-single">
+          <span class="dist-label">F</span>
+          <div class="bar-wrap-single">
+            <div class="bar-single" style="width:3.6%"></div>
+          </div>
+          <span class="bar-val">3.6%</span>
+        </div></div>
+        </div>
+        <div class="snap-card">
+          <div class="snap-header">
+            <strong>clean_data__counterfactual</strong>
+            <span class="badge ok">before</span>
+            <span class="small mono">2026-03-27T03:31:01</span>
+            <span class="small">500 rows</span>
+          </div>
+          <div class="dist-single">
+        <div class="dist-row-single">
+          <span class="dist-label">M</span>
+          <div class="bar-wrap-single">
+            <div class="bar-single" style="width:58.6%"></div>
+          </div>
+          <span class="bar-val">58.6%</span>
+        </div>
+        <div class="dist-row-single">
+          <span class="dist-label">F</span>
+          <div class="bar-wrap-single">
+            <div class="bar-single" style="width:41.4%"></div>
+          </div>
+          <span class="bar-val">41.4%</span>
+        </div></div>
+        </div>
+        <div class="snap-card">
+          <div class="snap-header">
+            <strong>clean_data__counterfactual</strong>
+            <span class="badge warn">after</span>
+            <span class="small mono">2026-03-27T03:31:01</span>
+            <span class="small">500 rows</span>
+          </div>
+          <div class="dist-single">
+        <div class="dist-row-single">
+          <span class="dist-label">M</span>
+          <div class="bar-wrap-single">
+            <div class="bar-single" style="width:58.6%"></div>
+          </div>
+          <span class="bar-val">58.6%</span>
+        </div>
+        <div class="dist-row-single">
+          <span class="dist-label">F</span>
+          <div class="bar-wrap-single">
+            <div class="bar-single" style="width:41.4%"></div>
+          </div>
+          <span class="bar-val">41.4%</span>
+        </div></div>
+        </div></div>
+</div>
+
+<div class="section">
+  <h2>Causal Attribution</h2>
+  <div class="attr-box">
+    <div class="attr-row">
+      <span class="attr-label">Attributed step</span>
+      <span class="attr-value mono">clean_data</span>
+    </div>
+    <div class="attr-row">
+      <span class="attr-label">Sensitive column</span>
+      <span class="attr-value">gender</span>
+    </div>
+    <div class="attr-row">
+      <span class="attr-label">Shift stat</span>
+      <span class="attr-value">0.1681 (JSD)
+        <span class="badge fail">HIGH</span>
+      </span>
+    </div>
+    <div class="attr-row">
+      <span class="attr-label">Confidence</span>
+      <span class="attr-value"><span class="badge ok">100%</span></span>
+    </div>
+    <div class="attr-row">
+      <span class="attr-label">Rows removed</span>
+      <span class="attr-value">361
+        (72.2% of dataset)</span>
+    </div>
+    <div class="attr-evidence">
+      <strong>Evidence:</strong> The &#x27;gender&#x27; distribution shifted high at &#x27;clean_data&#x27; (JSD = 0.1681). 361 rows were removed (72.2% of the dataset) at this step.
+    </div>
+    <div class="attr-evidence">
+      <strong>Recommendation:</strong>
+      <pre class="rec">Step &#x27;clean_data&#x27; is attributed as the causal source of the &#x27;gender&#x27; demographic shift (confidence = 0.334).
+
+Recommendation: Review the cleaning logic in this step for operations that disproportionately remove records from a demographic group. Common culprits: dropna(), threshold filters on fields that have systematic missingness by group.</pre>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Counterfactual Comparison</h2>
+  <div class="cf-box">
+    <div class="cf-header">
+      <span>Replaced step: <strong>clean_data</strong></span>
+      <span class="badge warn">WEAK</span>
+    </div>
+    <div class="cf-row-counts">
+      <span>Biased pipeline: <strong>139 rows</strong></span>
+      <span>Fixed pipeline: <strong>500 rows</strong></span>
+      <span>Recovered: <strong class="ok-text">+361</strong></span>
+    </div>
+    
+      <div class="cf-metrics">
+        <div class="cf-metric">
+          <span>Bias before fix</span>
+          <strong>0.2418</strong>
+        </div>
+        <div class="cf-metric">
+          <span>Bias after fix</span>
+          <strong>0.2415</strong>
+        </div>
+        <div class="cf-metric">
+          <span>Reduction</span>
+          <strong class="ok-text">+0.1%</strong>
+        </div>
+      </div>
+    <h4>'gender' distribution</h4>
+    <div class="dist-legend"><span class="leg before">■ Before fix</span>
+      <span class="leg after">■ After fix</span></div>
+    <div class="dist-chart">
+        <div class="dist-row">
+          <span class="dist-label">F</span>
+          <div class="bar-wrap">
+            <div class="bar before" style="width:3.6%"></div>
+            <span class="bar-val">3.6%</span>
+          </div>
+          <span class="arrow">→</span>
+          <div class="bar-wrap">
+            <div class="bar after" style="width:41.4%"></div>
+            <span class="bar-val">41.4%</span>
+          </div>
+          <span class="delta pos">+37.8%</span>
+        </div>
+        <div class="dist-row">
+          <span class="dist-label">M</span>
+          <div class="bar-wrap">
+            <div class="bar before" style="width:96.4%"></div>
+            <span class="bar-val">96.4%</span>
+          </div>
+          <span class="arrow">→</span>
+          <div class="bar-wrap">
+            <div class="bar after" style="width:58.6%"></div>
+            <span class="bar-val">58.6%</span>
+          </div>
+          <span class="delta neg">-37.8%</span>
+        </div></div>
+    <p class="verdict-detail">Bias metric reduced by only 0.1%. The replacement helps marginally. The attributed step may not be the sole causal source.</p>
+  </div>
+</div>
+
+<div class="section">
+  <h2>Logged Metrics</h2>
+  <table>
+    <thead><tr><th>Metric</th><th>Value</th><th>Source</th><th>Step</th><th>Measured</th></tr></thead>
+    <tbody><tr>
+          <td>demographic_parity_gap</td>
+          <td class="num">0.241791</td>
+          <td>DataLineageML.metrics</td>
+          <td>clean_data</td>
+          <td class="mono small">2026-03-27T03:28:12</td>
+        </tr></tbody>
+  </table>
+</div>
+
+<div class="footer">
+  Generated by <strong>DataLineageML</strong> — Causal data provenance for AI safety.<br>
+  <a href="https://github.com/adejumobioluwafemi/data-lineage-ml">github.com/adejumobioluwafemi/data-lineage-ml</a>
+</div>
+</body>
+</html>

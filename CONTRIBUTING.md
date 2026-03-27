@@ -1,18 +1,17 @@
 # Contributing to DataLineageML
 
-DataLineageML is an active research project building toward **causal data provenance for AI safety**. Contributions are welcome at every level — from fixing a typo to implementing a causal attribution module.
+DataLineageML is an active research project. v0.2 is complete. Contributions are welcome at every level.
 
 ---
 
 ## Table of contents
 
-- [Understanding the project direction](#understanding-the-project-direction)
+- [Project direction](#project-direction)
 - [Getting started](#getting-started)
-- [Running tests](#running-tests)
 - [What we need most](#what-we-need-most)
+- [Research vs polish — honest assessment](#research-vs-polish--honest-assessment)
 - [What to leave for the maintainer](#what-to-leave-for-the-maintainer)
 - [Module guide](#module-guide)
-- [Adding a new feature](#adding-a-new-feature)
 - [Code style](#code-style)
 - [Writing tests](#writing-tests)
 - [Opening issues](#opening-issues)
@@ -20,18 +19,15 @@ DataLineageML is an active research project building toward **causal data proven
 
 ---
 
-## Understanding the project direction
+## Project direction
 
-Before contributing, read the one-paragraph positioning in the README:
+> DataLineageML is not an observability tool. It is a causal attribution engine. Given a fairness failure in an AI system, it identifies the exact data transformation step responsible and lets you replay the pipeline without it to verify the fix.
 
-> DataLineageML is not an observability tool. It is a causal attribution engine. Given a safety or fairness failure in an AI system, it identifies the exact data transformation step responsible and lets you replay the pipeline without it to verify the fix.
+Three questions every new feature should answer before being built:
 
-This shapes every contribution decision. If a feature makes the tool better at **observability** (recording what happened) but not at **causal attribution** (explaining why it happened), it is probably not the right thing to build here. MLflow already does observability excellently.
-
-The three questions every new feature should answer:
-1. Does this help a user find *which pipeline step* caused a safety failure?
-2. Does this work offline with zero cloud dependencies?
-3. Does this keep the core API simple enough that someone can instrument a pipeline in under five minutes?
+1. Does it help a user find *which pipeline step* caused a safety failure?
+2. Does it work offline with zero cloud dependencies?
+3. Does it keep the core API simple enough that someone can instrument a pipeline in under five minutes?
 
 ---
 
@@ -41,206 +37,129 @@ The three questions every new feature should answer:
 git clone https://github.com/adejumobioluwafemi/data-lineage-ml.git
 cd data-lineage-ml
 pip install -e ".[dev]"
+
+# Verify
+python run_tests.py      # stdlib runner, no pytest needed
+pytest tests/unit/ -v    # if you have pytest installed
 ```
 
-Verify the install:
-
-```bash
-python run_tests.py
-# Expected: 19/19 tests passed ✓
-```
-
-If you have pytest installed:
-
-```bash
-pytest tests/unit/ -v
-```
-
----
-
-## Running tests
-
-```bash
-# Stdlib runner — no dependencies needed
-python run_tests.py
-
-# pytest (if installed)
-pytest tests/unit/ -v
-
-# With coverage
-pytest tests/unit/ --cov=src/datalineageml --cov-report=term-missing
-
-# Single test file
-pytest tests/unit/test_decorator.py -v
-```
-
-All tests use `tempfile.NamedTemporaryFile` so each test gets its own isolated SQLite file. No global state, no file cleanup needed, no test order dependencies.
+Expected: 318/318 tests passing.
 
 ---
 
 ## What we need most
 
-Contributions are prioritised in this order. Start from the top.
+### Priority 1 — CLI (very high value, 2 days)
 
-### 1. v0.2 causal attribution modules (highest priority)
+The single highest-impact contribution. A user who wants to audit an existing `pipeline.db` file should not have to write any Python code.
 
-These are the novel research features — nothing like this exists in MLflow, W&B, or LangSmith.
-
-**`src/datalineageml/analysis/profiler.py`** — `DataFrameProfiler`
-Computes a statistical snapshot of a DataFrame: shape, null rates, numeric distributions (mean/std/min/max/p25/p75), categorical value counts (top 10), and critically — the distribution of any tagged `sensitive_cols` (gender, age group, region, etc.). Called automatically inside `@track` when `snapshot=True`.
-
-```python
-@track(name="clean_data", snapshot=True, sensitive_cols=["gender", "zone"])
-def clean_data(df):
-    return df.dropna()
-# Automatically stores demographic snapshot before and after
+```bash
+datalineageml audit pipeline.db --sensitive gender
+datalineageml audit pipeline.db --sensitive gender --output report.html
+datalineageml compare run_1.db run_2.db --sensitive gender
 ```
 
-**`src/datalineageml/analysis/shift_detector.py`** — `ShiftDetector`
-Compares demographic snapshots between adjacent pipeline steps. Uses Jensen-Shannon divergence for categorical columns and the Kolmogorov-Smirnov test for numeric ones (both in `scipy.stats`). Returns shift scores per column per step, with HIGH/MEDIUM/LOW flags.
+Implementation: `src/datalineageml/cli.py` using `argparse`. Entry point in `pyproject.toml`. The audit command runs `ShiftDetector`, `CausalAttributor`, and `generate_report` on the provided store path.
 
-**`src/datalineageml/analysis/attributor.py`** — `CausalAttributor`
-Takes a set of fairness/safety metrics and the shift scores, ranks steps by attribution likelihood, and produces a finding: which step most likely caused the metric degradation, with what confidence, and why.
-
-**`src/datalineageml/replay/replayer.py`** — `CounterfactualReplayer`
-Re-executes the pipeline from a flagged step with a replacement function, re-measures the metric, and reports the before/after delta. This is the "proof" step — attribution is only reported when counterfactual evidence confirms it.
-
-### 2. Global default store (`dlm.init()`)
-
-Currently every `@track` call needs `store=STORE` explicitly. A module-level default store fixes this:
+### Priority 2 — sklearn Pipeline wrapper (medium value, 3 days)
 
 ```python
-import datalineageml as dlm
-dlm.init(db_path="pipeline.db")  # called once at top of script
+from datalineageml.integrations.sklearn_integration import tracked_pipeline
 
-@dlm.track(name="clean")         # no store= needed
-def clean(df): ...
+pipeline = tracked_pipeline(
+    sklearn.pipeline.Pipeline([
+        ("scaler", StandardScaler()),
+        ("classifier", RandomForestClassifier()),
+    ]),
+    sensitive_cols=["gender"],
+)
+pipeline.fit(X, y)
+# Every fit_transform step is automatically tracked
 ```
 
-Implementation: a module-level `_DEFAULT_STORE` variable in `src/datalineageml/__init__.py`, set by `dlm.init()`. The `@track` decorator falls back to `_DEFAULT_STORE` if no explicit `store=` is passed. Must maintain full backwards compatibility with explicit `store=` passing.
+### Priority 3 — Wasserstein distance (research contribution, 2 days)
 
-### 3. New framework integrations
+An alternative to Jensen-Shannon divergence with better properties for continuous distributions and ordinal categories. Add as `test="wasserstein"` option in `ShiftDetector.detect()`.
 
-- **scikit-learn Pipeline wrapper** — wrap `sklearn.pipeline.Pipeline` so every `fit_transform` step is automatically tracked
-- **PyTorch DataLoader** — track dataset versions passed into training loops
-- **HuggingFace `datasets`** — track `Dataset` objects (hash the dataset fingerprint, not the full data)
+### Priority 4 — Multi-step attribution (research contribution, 4 days)
 
-### 4. Additional hashing strategies
+Currently `CausalAttributor` attributes bias to a single step. Real pipelines often have multiple contributing steps — e.g. a `dropna()` that removes 20% of female records, followed by a `filter()` that removes another 10%. The attributor should return a ranked list with partial attribution weights.
 
-The current `_hash_input()` in `decorator.py` handles pandas DataFrames, NumPy arrays, dicts, and primitives. Common edge cases that need coverage:
+### Priority 5 — Bug reports
 
-- `scipy.sparse` matrices
-- `polars` DataFrames
-- Python dataclasses and Pydantic models
-- File paths — hash the file content, not the path string
+A minimal reproducible example in an issue is worth more than a PR without one.
 
-### 5. Bug reports
+---
 
-If something is broken, a minimal reproducible example in an issue is more valuable than a PR without one. See [Opening issues](#opening-issues).
+## Research vs polish — honest assessment
+
+This is the full picture of what is genuinely novel vs what is useful tooling:
+
+| Feature | Type | Why it matters |
+|---|---|---|
+| CLI | Polish/DX | Makes the tool usable without writing code. Very high user impact. |
+| sklearn wrapper | Integration | Broadens audience to the largest ML ecosystem. |
+| Wasserstein distance | Research | Better metric for ordinal/continuous sensitive columns (age groups, income bands). |
+| Multi-step attribution | Research | Currently attributes to one step — real bias often has multiple sources. This is the hardest open problem. |
+| Causal graph discovery | Research | Automatically infer which upstream steps influence each downstream step using structural causal models |
+| Cross-agent provenance | Research | Track demographic shifts through LLM fine-tuning pipelines where data flows across multiple agents. |
+| Formal verification of counterfactual claims | Research | Use do-calculus to prove attribution claims rather than empirically verify them. |
+| Streamlit dashboard | Polish | Nice but not novel — other tools already do this well. |
+| Async step support in replayer | Feature | Adds complexity without enabling new use cases at v0.2 scale. |
+| Cloud backends | Out of scope | The offline-first design is a core feature, not a limitation. |
 
 ---
 
 ## What to leave for the maintainer
 
-Do not open PRs for the following without prior discussion in an issue:
+Do not open PRs for the following without prior discussion:
 
-- **SQLite schema changes** — backwards compatibility is critical. Every schema change requires a migration strategy.
-- **Changing the public API** — `track`, `LineageContext`, `LineageStore`, `LineageGraph` — the signatures of these are stable. New parameters may be added but existing ones cannot be removed or renamed without a deprecation cycle.
-- **New visualization backends** — Plotly is the only supported backend. Adding matplotlib, Bokeh, etc. is scope creep unless there is strong evidence of user demand.
-- **Cloud/server backends** — the zero-dependency, offline-first design is a core feature, not a limitation. PRs adding cloud storage backends will not be merged until v1.0 at the earliest.
-- **The causal attribution algorithms themselves** — `ShiftDetector`, `CausalAttributor`, and `CounterfactualReplayer` are research contributions. The algorithmic choices (Jensen-Shannon vs Wasserstein, confidence thresholds, attribution ranking) will be decided by the maintainer based on the research framing paper. Contributions to the scaffolding, tests, and API design are welcome; contributions to the core algorithms should start as a discussion.
+- **SQLite schema changes** — every schema change needs a migration strategy for existing `.db` files.
+- **Renaming public API** — `track`, `LineageContext`, `LineageStore`, `LineageGraph`, `CounterfactualReplayer`, `generate_report`. New parameters may be added; existing ones cannot be removed without a deprecation cycle.
+- **The core attribution algorithms** — JSD thresholds, confidence scoring weights, attribution ranking. These are research parameters documented in the framing paper. Algorithmic changes should start as a Discussion.
+- **New visualization backends** — Plotly is the only supported backend.
+- **Cloud/server backends** — will not be merged until v1.0 at the earliest.
 
 ---
 
 ## Module guide
 
-Use this map when deciding where to put new code:
-
 ```
 src/datalineageml/
 │
 ├── trackers/              ← HOW steps are captured
-│   ├── decorator.py       ← @track — the core instrument
-│   └── context.py         ← LineageContext — pipeline grouping
+│   ├── decorator.py       ← @track + __track_meta__
+│   └── context.py         ← LineageContext
 │
 ├── storage/               ← WHERE data is persisted
-│   └── sqlite_store.py    ← SQLite backend (zero deps)
+│   └── sqlite_store.py    ← SQLite: steps, pipelines, snapshots, metrics
 │
 ├── visualization/         ← HOW lineage is displayed
-│   └── graph.py           ← NetworkX + Plotly DAG
+│   └── graph.py           ← Plotly + NetworkX DAG
 │
 ├── integrations/          ← HOW third-party libs plug in
 │   └── pandas_integration.py
 │
-├── analysis/              ← WHY failures happened (v0.2)
-│   ├── profiler.py        ← Statistical snapshot per step
-│   ├── shift_detector.py  ← Distribution shift scoring
-│   └── attributor.py      ← Causal step attribution
+├── analysis/              ← WHY failures happened
+│   ├── profiler.py        ← DataFrameProfiler
+│   ├── shift_detector.py  ← ShiftDetector (JSD + KS)
+│   ├── attributor.py      ← CausalAttributor
+│   ├── cross_run.py       ← CrossRunComparator
+│   ├── metrics.py         ← DPG, EO, PP, RegressionFairnessAuditor
+│   └── sensitive_cols.py  ← discover_sensitive_cols
 │
-└── replay/                ← PROVING the fix works (v0.2)
-    └── replayer.py        ← Counterfactual pipeline replay
+├── replay/                ← PROVING the fix works
+│   └── replayer.py        ← CounterfactualReplayer
+│
+└── report.py              ← HTML audit report export
 ```
-
-New code that does not fit cleanly into one of these modules is a signal that it may be out of scope.
-
----
-
-## Adding a new feature
-
-### Step 1 — open an issue first
-
-For anything beyond a bug fix or typo, open an issue describing what you want to build and why. This avoids spending a week on something that will not be merged.
-
-### Step 2 — write the test first
-
-DataLineageML uses a test-first approach for new features. Before writing implementation code, write a test that fails because the feature does not exist yet. This forces you to design the API from the user's perspective.
-
-```python
-# tests/unit/test_profiler.py  — write this BEFORE profiler.py exists
-
-def test_profiler_captures_gender_distribution(store, tmp_path):
-    import pandas as pd
-    from datalineageml.analysis.profiler import DataFrameProfiler
-
-    df = pd.DataFrame({
-        "age": [25, 32, 45, 28, 38],
-        "gender": ["F", "M", "M", "F", "M"],
-        "income": [50000, 72000, 65000, 48000, 91000],
-    })
-
-    profiler = DataFrameProfiler(sensitive_cols=["gender"])
-    snapshot = profiler.profile(df, step_name="test_step", run_id="run-001")
-
-    assert snapshot["sensitive"]["gender"]["F"] == pytest.approx(0.4)
-    assert snapshot["sensitive"]["gender"]["M"] == pytest.approx(0.6)
-```
-
-### Step 3 — implement the minimum that makes the test pass
-
-Do not implement features beyond what the test requires. Add tests incrementally as you extend the feature.
-
-### Step 4 — check the full suite still passes
-
-```bash
-python run_tests.py
-# All existing 19 tests must still pass, plus your new ones
-```
-
-### Step 5 — update documentation
-
-- Add a docstring to every public class and method
-- Update `README.md` if the feature changes the public API
-- Update the relevant section of `CONTRIBUTING.md` if you add a new module
 
 ---
 
 ## Code style
 
 ```bash
-# Format (required before every PR)
 black src/ tests/ --line-length 100
-
-# Lint (required — fix all warnings)
 ruff check src/ tests/
 ```
 
@@ -249,138 +168,116 @@ Rules:
 - Type hints on all public function signatures
 - Docstring on every public class and method (Google style)
 - No `print()` in library code — use `warnings.warn()` for user-facing messages
-- No hardcoded file paths anywhere — always use `tmp_path` or `tempfile` in tests
-
-Example of acceptable docstring style:
-
-```python
-def log_step(self, *, run_id: str, step_name: str, ...) -> None:
-    """Persist a completed pipeline step to the lineage store.
-
-    Args:
-        run_id: UUID identifying this specific function call.
-        step_name: Human-readable name of the transformation step.
-        ...
-
-    Raises:
-        sqlite3.OperationalError: If the database is locked or corrupted.
-    """
-```
+- No hardcoded file paths — always use `tmp_path` (pytest) or `tempfile` (stdlib)
+- No `datetime.utcnow()` — use `datetime.now(timezone.utc)` (Python 3.12+ compatibility)
 
 ---
 
 ## Writing tests
 
-Every new feature needs tests. Every bug fix needs a test that would have caught the bug.
-
-**Required patterns:**
+Every feature needs tests. Every bug fix needs a test that would have caught the bug.
 
 ```python
-# Always use tempfile — never hardcode a path
-import tempfile
-import os
-
-def setUp(self):
-    self.tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    self.store = LineageStore(db_path=self.tmp.name)
-
-def tearDown(self):
-    self.store.close()
-    os.unlink(self.tmp.name)
+# Always use tmp_path (pytest) or tempfile — never hardcode a path
+@pytest.fixture
+def store(tmp_path):
+    s = LineageStore(db_path=str(tmp_path / "test.db"))
+    yield s
+    s.close()
 ```
 
-**Test naming convention:**
+Test naming:
 
 ```
-test_<what it does>           ← good
-test_<component>_<behaviour>  ← also good
-
-test_thing                    ← too vague
-test_case_1                   ← never
+test_<what_it_does>            ← preferred
+test_<component>_<behaviour>   ← also good
+test_thing                     ← too vague
+test_case_1                    ← never
 ```
 
-**What every test must cover for a new public function:**
+What every test for a new public function must cover:
+1. Happy path
+2. Failure path (correct exception, correct message)
+3. Edge case (empty DataFrame, None value, single row)
+4. Idempotency where applicable
 
-1. The happy path — does it work correctly with valid input?
-2. The failure path — does it raise the right exception with invalid input?
-3. The edge case — empty DataFrame, None values, single-row dataset, etc.
-4. Idempotency where applicable — running it twice produces the same result
-
-**What tests must NOT do:**
-
+What tests must never do:
 - Touch the network
-- Write to a fixed path (always use `tempfile`)
-- Depend on test execution order
+- Write to a fixed path
+- Depend on execution order
 - Import optional dependencies without a try/except guard
+
+Run both the stdlib runner and pytest before every PR — they test different things:
+
+```bash
+python run_tests.py      # fast, no deps, catches regressions in the original 64 tests
+pytest tests/unit/ -v    # full suite including parametrized and fixture-based tests
+```
 
 ---
 
 ## Opening issues
 
-Use this template:
-
 ```
-**Python version:** 3.x.x
-**OS:** macOS / Linux / Windows
-**DataLineageML version:** 0.x.x
+Python version:   3.x.x
+OS:               macOS / Linux / Windows
+Package version:  0.x.x
 
-**What I expected:**
+What I expected:
 One sentence.
 
-**What happened instead:**
-One sentence. Include the full traceback if there is one.
+What happened instead:
+One sentence. Include the full traceback.
 
-**Minimal reproducible example:**
-
+Minimal reproducible example:
 ```python
-# The smallest possible code that reproduces the issue
-from datalineageml import track, LineageStore
+import datalineageml as dlm
+from datalineageml import track
+dlm.init(db_path=":memory:")
 
-store = LineageStore(db_path=":memory:")
-
-@track(name="test", store=store)
-def fn(x):
-    return x
+@track(name="test")
+def fn(x): return x
 
 fn(1)  # ← error happens here
 ```
 
-**Additional context:**
-Anything else that might be relevant.
+Additional context:
 ```
 
 ---
 
 ## Opening pull requests
 
-Before opening a PR:
+Checklist before opening:
 
-- [ ] `python run_tests.py` passes (all existing + new tests)
-- [ ] `black src/ tests/ --line-length 100` has been run
-- [ ] `ruff check src/ tests/` passes with no warnings
-- [ ] Every new public function has a type-hinted signature and docstring
-- [ ] `README.md` is updated if the public API changed
-- [ ] The PR description explains *why* the change is needed, not just *what* it does
+- [ ] `python run_tests.py` passes
+- [ ] `pytest tests/unit/ -v` passes
+- [ ] `black src/ tests/ --line-length 100` run
+- [ ] `ruff check src/ tests/` clean
+- [ ] Every new public function has type hints and a docstring
+- [ ] `README.md` updated if the public API changed
+- [ ] `CHANGELOG.md` entry added under `[Unreleased]`
+- [ ] PR description explains *why* the change is needed
 
 PR title format:
 
 ```
-feat: add DataFrameProfiler with sensitive column tracking
-fix: store fragmentation when store= omitted from @track
-docs: extend CONTRIBUTING with v0.2 module guide
-test: add edge cases for empty DataFrame hashing
+feat: add CLI audit command
+fix: KS threshold miscalibrated for small datasets
+docs: update CONTRIBUTING with v0.2 module guide
+test: add edge cases for empty DataFrame in profiler
 refactor: extract _hash_input into standalone module
 ```
 
-Keep PRs focused. One feature or fix per PR. A PR that adds a profiler AND fixes a visualization bug AND updates the README should be three PRs.
+One feature or fix per PR.
 
 ---
 
 ## Questions?
 
-Open a GitHub Discussion (not an issue) for questions about design direction, research framing, or "is this a good idea?" conversations. Issues are for bugs and confirmed feature requests only.
+Open a GitHub Discussion for design direction, research framing, or "is this a good idea?" questions. Issues are for bugs and confirmed feature requests only.
 
 ---
 
-*DataLineageML — causal data provenance for AI safety.*  
-*Built by Oluwafemi Adejumobi · Ibadan, Nigeria · MIT License*
+*DataLineageML — causal data provenance for AI safety.*
+*Built by Oluwafemi Philip Adejumobi · Ibadan, Nigeria · MIT License*
