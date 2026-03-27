@@ -1,14 +1,14 @@
 """
 examples/basic_pipeline.py
 
-DataLineageML v0.2 — full causal attribution demo.
+DataLineageML v0.2 — complete causal attribution + counterfactual proof demo.
 
-Complete loop:
+Full loop:
   1. Pipeline runs with snapshot=True
-  2. Snapshots logged automatically (gender distribution at each step)
-  3. ShiftDetector ranks steps by JSD + KS shift magnitude
-  4. CausalAttributor identifies the causal step and generates a recommendation
-  5. Bias metric logged against the attributed run_id
+  2. ShiftDetector: gender distribution shifted significantly at clean_data
+  3. CausalAttributor: clean_data attributed (confidence 100%)
+  4. CounterfactualReplayer: bias drops from X to Y after imputation fix
+  5. Verdict: STRONG / MODERATE — attribution confirmed
 
 Run:
     pip install -e ".[all]"
@@ -16,198 +16,197 @@ Run:
 """
 
 import sys, os
-
 try:
-    import datalineageml  # noqa: F401
+    import datalineageml
 except ImportError:
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), "../src"))
 
 import pandas as pd
+import numpy as np
 import datalineageml as dlm
-from datalineageml import track, LineageContext, LineageGraph
+from datalineageml import track, LineageContext, CounterfactualReplayer
 from datalineageml.analysis import (
     DataFrameProfiler,
-    print_snapshot_comparison,
     ShiftDetector,
     CausalAttributor,
 )
+from datalineageml.analysis.metrics import DemographicParityGap
 
 # ── Global store ──────────────────────────────────────────────────────────────
 DB_PATH = os.path.join(os.path.dirname(__file__), "../lineage_demo.db")
 dlm.init(db_path=DB_PATH)
 
-# ── Synthetic dataset ─────────────────────────────────────────────────────────
-# Null pattern mirrors the Oyo State structural inequality:
-# female rows are more likely to be missing 'income' and 'age'
-# because of under-registration in formal employment records.
-RAW_DATA = {
-    "age":    [25, 32, None, 45, 28, 38, None, 52, 29, 41,
-               34, 27, None, 48, 31, 39, 26, None, 44, 35],
-    "income": [50000, 72000, 65000, None, 48000, None, 55000, 88000,
-               None,  76000, 58000, None, None,  84000, 52000, 69000,
-               None,  78000, None,  62000],
-    "score":  [0.72, 0.85, 0.61, 0.90, 0.55, 0.88, 0.70, 0.92,
-               0.58, 0.81, 0.67, 0.79, 0.53, 0.95, 0.62, 0.84,
-               0.59, 0.76, 0.88, 0.71],
-    "gender": ["F", "M", "F", "M", "F", "F", "F", "M",
-               "F", "M", "M", "F", "F", "M", "M", "M",
-               "F", "M", "F", "M"],
-    "target": [0, 1, 0, 1, 0, 1, 0, 1, 0, 1,
-               0, 1, 0, 1, 0, 1, 0, 0, 1, 1],
-}
+# ── Synthetic data: structured missingness mirrors Oyo State patterns ─────────
+np.random.seed(42)
+N = 200
+_gender  = np.random.choice(["F", "M"], N, p=[0.5, 0.5])
+_is_f    = _gender == "F"
+_land    = np.where(_is_f,
+               np.random.choice(["registered", None], N, p=[0.11, 0.89]), # type: ignore
+               np.random.choice(["registered", None], N, p=[0.67, 0.33])).tolist() # type: ignore
+_income  = np.where(_is_f,
+               np.random.normal(45000, 8000, N).clip(20000, 90000),
+               np.random.normal(60000, 10000, N).clip(20000, 100000))
+_score   = np.random.uniform(0.4, 0.95, N).round(3)
+_target  = ((_score > 0.65) & (_income > 42000)).astype(int)
+
+RAW_DATA = pd.DataFrame({
+    "gender":     _gender,
+    "land_title": _land,
+    "income":     _income.round(0),
+    "score":      _score,
+    "target":     _target,
+})
 
 
-# ── Pipeline functions ────────────────────────────────────────────────────────
-
-@track(name="load_data", tags={"stage": "ingestion"})
-def load_data():
-    return pd.DataFrame(RAW_DATA)
+def load_data(df):
+    return df.copy()
 
 
-@track(
-    name="clean_data",
-    tags={"stage": "preprocessing"},
-    snapshot=True,              # ← log demographic snapshot before AND after
-    sensitive_cols=["gender"],  # ← track gender distribution at this step
-)
 def clean_data(df):
-    before = len(df)
-    df = df.dropna().reset_index(drop=True)
-    print(f"  clean_data: {before} rows → {len(df)} rows "
-          f"(dropped {before - len(df)})")
-    return df
+    """Biased: dropna disproportionately removes female farmers."""
+    return df.dropna().reset_index(drop=True)
 
 
-@track(name="engineer_features", tags={"stage": "feature_engineering"})
 def engineer_features(df):
     df = df.copy()
-    df["income_per_age"] = df["income"] / df["age"]
-    df["high_score"]     = (df["score"] > 0.75).astype(int)
-    print(f"  engineer_features: shape {df.shape}")
+    df["score_income"] = df["score"] * (df["income"] / df["income"].max())
     return df
 
 
-@track(name="normalize", tags={"stage": "preprocessing"})
 def normalize(df):
     df = df.copy()
-    for col in ["age", "income", "score", "income_per_age"]:
+    for col in ["income", "score", "score_income"]:
         lo, hi = df[col].min(), df[col].max()
         if hi > lo:
             df[col] = (df[col] - lo) / (hi - lo)
-    print(f"  normalize: scaled 4 columns")
     return df
 
 
-@track(name="train_model", tags={"stage": "training", "model": "logistic_regression"})
-def train_model(df):
-    from sklearn.linear_model import LogisticRegression
-    from sklearn.model_selection import cross_val_score
-    X = df[["age", "income", "score", "income_per_age", "high_score"]]
-    y = df["target"]
-    model = LogisticRegression(random_state=42, max_iter=500)
-    scores = cross_val_score(model, X, y, cv=3, scoring="accuracy")
-    model.fit(X, y)
-    print(f"  train_model: CV accuracy = {scores.mean():.3f} ± {scores.std():.3f}")
-    return model
+# Tracked versions for the main pipeline run 
+
+@track(name="load_data",         tags={"stage": "ingestion"})
+def t_load(df):  return load_data(df)
+
+@track(name="clean_data",        tags={"stage": "preprocessing"},
+       snapshot=True, sensitive_cols=["gender"])
+def t_clean(df): return clean_data(df)
+
+@track(name="engineer_features", tags={"stage": "feature_engineering"})
+def t_feats(df): return engineer_features(df)
+
+@track(name="normalize",         tags={"stage": "preprocessing"})
+def t_norm(df):  return normalize(df)
 
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Replacement function 
+
+def impute_data(df):
+    """Fixed: stratified mode imputation preserves demographic balance."""
+    df = df.copy()
+    for g in df["gender"].dropna().unique():
+        mask = (df["gender"] == g) & df["land_title"].isna()
+        fill = df.loc[df["gender"] == g, "land_title"].mode()
+        df.loc[mask, "land_title"] = fill.iloc[0] if len(fill) > 0 else "unregistered"
+    return df
+
+
+# ── Bias metric (no model needed)
+
+def dpg_bias_metric(df):
+    """Demographic Parity Gap on target — computable from data alone."""
+    if "target" not in df.columns or "gender" not in df.columns:
+        return 0.0
+    f_rate = df[df["gender"] == "F"]["target"].mean()
+    m_rate = df[df["gender"] == "M"]["target"].mean()
+    if np.isnan(f_rate) or np.isnan(m_rate):
+        return 0.0
+    return abs(float(f_rate) - float(m_rate))
+
 
 def main():
     store = dlm.get_default_store()
     store.clear()
 
-    print("\n" + "═" * 72)
-    print("  DataLineageML v0.2  ·  Full causal attribution demo")
-    print("═" * 72)
+    w = 72
+    print(f"\n{'═' * w}")
+    print(f"  DataLineageML v0.2  ·  Full loop: detect → attribute → prove")
+    print(f"{'═' * w}\n")
 
-    # ── Step 1: Profile raw data ──────────────────────────────────────────
-    raw_df   = pd.DataFrame(RAW_DATA)
+    # ── 1. Profile raw data 
     profiler = DataFrameProfiler(sensitive_cols=["gender"])
-    print()
-    profiler.print_profile(raw_df, step_name="raw_data")
+    profiler.print_profile(RAW_DATA, step_name="raw_data")
 
-    # ── Step 2: Run the pipeline ──────────────────────────────────────────
-    print("── Running pipeline ─────────────────────────────────────────────────\n")
-    with LineageContext(name="churn_pipeline_v2"):
-        d1 = load_data()
-        d2 = clean_data(d1)
-        d3 = engineer_features(d2)
-        d4 = normalize(d3)
-        model = train_model(d4)
+    # ── 2. Run biased pipeline
+    print("── Step 1: Run pipeline ──\n")
+    with LineageContext(name="demo_pipeline_v1"):
+        d1 = t_load(RAW_DATA)
+        d2 = t_clean(d1)
+        d3 = t_feats(d2)
+        d4 = t_norm(d3)
 
-    # ── Step 3: Logged steps ──────────────────────────────────────────────
-    print("\n── Logged steps ─────────────────────────────────────────────────────")
     for s in store.get_steps():
         icon = "✓" if s["status"] == "success" else "✗"
         snap = " [snapshot]" if store.get_snapshots(s["step_name"]) else ""
-        print(f"  {icon}  {s['step_name']:28s}  {s['duration_ms']:6.1f}ms"
-              f"  hash={s['output_hash'][:10]}...{snap}")
+        print(f"  {icon}  {s['step_name']:24s}  {s['duration_ms']:6.1f}ms{snap}")
 
-    # ── Step 4: Manual snapshot comparison (Week 2) ───────────────────────
-    snaps = store.get_snapshots("clean_data")
-    if len(snaps) == 2:
-        before = next(s for s in snaps if s["position"] == "before")
-        after  = next(s for s in snaps if s["position"] == "after")
-        print_snapshot_comparison(before, after, step_name="clean_data")
-
-    # ── Step 5: ShiftDetector — ranked shift report (Week 3) ─────────────
+    # ── 3. Detect shift
+    print(f"\n── Step 2: Detect distribution shifts ──")
     detector = ShiftDetector(store=store)
-    shifts   = detector.detect(pipeline_name="churn_pipeline_v2")
-    detector.print_report(shifts, title="Shift Report — churn_pipeline_v2")
+    shifts   = detector.detect()
+    detector.print_report(shifts, title="Shift Report")
 
-    # ── Step 6: CausalAttributor — attribution + recommendation (Week 4) ─
-    print("── Causal Attribution ───────────────────────────────────────────────")
+    # ── 4. Attribute 
+    print(f"── Step 3: Attribute the causal step ──")
     attributor = CausalAttributor(store=store)
-    result     = attributor.attribute(sensitive_col="gender")
-    attributor.print_attribution(result)
+    attribution = attributor.attribute(sensitive_col="gender")
+    attributor.print_attribution(attribution)
 
-    # ── Step 7: Log the bias metric ───────────────────────────────────────
-    if result["attributed_step"]:
-        clean_step = store.get_steps("clean_data")
-        if clean_step:
-            top_jsd = result["stat"]
-            snaps2  = store.get_snapshots("clean_data")
-            f_before = next((s["sensitive_stats"]["gender"].get("F", 0)
-                             for s in snaps2 if s["position"] == "before"), 0)
-            f_after  = next((s["sensitive_stats"]["gender"].get("F", 0)
-                             for s in snaps2 if s["position"] == "after"), 0)
-            store.log_metrics(
-                run_id=clean_step[0]["run_id"],
-                metrics={
-                    "gender_jsd":                      round(top_jsd, 4),
-                    "gender_representation_shift":     round(f_before - f_after, 4),
-                    "attribution_confidence":          round(result["confidence"], 4),
-                },
-                metric_source="CausalAttributor",
-                step_name=result["attributed_step"],
-                tags={
-                    "sensitive_col": "gender",
-                    "flag":          result["flag"],
-                    "pipeline":      "churn_pipeline_v2",
-                },
-            )
-            print(f"  ✓ Bias metrics logged:")
-            print(f"      gender_jsd                    = {top_jsd:.4f}")
-            print(f"      gender_representation_shift   = {f_before - f_after:.4f}")
-            print(f"      attribution_confidence        = {result['confidence']:.4f}")
-            print(f"      attributed to step:             '{result['attributed_step']}'")
-            print()
+    attributed_step = attribution["attributed_step"]
+    if attributed_step is None:
+        print("  Attribution inconclusive — cannot run counterfactual.\n")
+        return
 
-    # ── Step 8: Pipeline status ───────────────────────────────────────────
-    print("── Pipeline run ─────────────────────────────────────────────────────")
-    for p in store.get_pipelines():
-        print(f"  {p['name']}  status={p['status']}  "
-              f"started={p['started_at'][:19]}")
+    # Log DPG metric against the attributed step
+    dpg = DemographicParityGap.compute(d2, "gender", "target")
+    clean_run = store.get_steps("clean_data")
+    if clean_run:
+        store.log_metrics(**dpg.to_store_kwargs(
+            run_id=clean_run[0]["run_id"], step_name="clean_data"))
 
-    # ── Step 9: Lineage graph ─────────────────────────────────────────────
-    html = os.path.join(os.path.dirname(__file__), "../lineage_demo.html")
-    print(f"\n── Lineage graph → {os.path.basename(html)} ──────────────────────")
-    try:
-        LineageGraph().show(output_html=html)
-        print(f"  Open with: open lineage_demo.html\n")
-    except ImportError as e:
-        print(f"  Skipped: {e}\n")
+    # ── 5. Counterfactual proof
+    print(f"── Step 4: Counterfactual proof ──")
+    replayer = (CounterfactualReplayer(store=store)
+                .register("load_data",         load_data)
+                .register("clean_data",        clean_data,
+                          snapshot=True, sensitive_cols=["gender"])
+                .register("engineer_features", engineer_features)
+                .register("normalize",         normalize))
+
+    result = replayer.replay(
+        raw_data       = RAW_DATA,
+        replace_step   = attributed_step,
+        replacement_fn = impute_data,
+        sensitive_col  = "gender",
+        bias_metric_fn = dpg_bias_metric,
+    )
+    replayer.print_result(result)
+
+    # ── 6. Summary 
+    print(f"── Summary ──")
+    if result["bias_metric_before"] is not None:
+        bb  = result["bias_metric_before"]
+        ba  = result["bias_metric_after"]
+        pct = result["bias_reduction_pct"]
+        rec = result["rows_recovered"]
+        print(f"  Causal step:     '{attributed_step}'  "
+              f"(confidence {attribution['confidence']:.0%})")
+        print(f"  Bias before fix: {bb:.4f}  (DPG = {bb:.1%})")
+        print(f"  Bias after fix:  {ba:.4f}  (DPG = {ba:.1%})")
+        print(f"  Reduction:       {pct:+.1f}%")
+        print(f"  Rows recovered:  {rec:+,}")
+        print(f"  Verdict:         {result['verdict']} — {result['verdict_detail'][:80]}")
+    print()
 
 
 if __name__ == "__main__":

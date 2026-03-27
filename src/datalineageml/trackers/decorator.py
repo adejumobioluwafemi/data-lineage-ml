@@ -26,9 +26,9 @@ def _hash_input(obj: Any) -> str:
     except ImportError:
         pass
     try:
-        import numpy as np # type: ignore
+        import numpy as np
         if isinstance(obj, np.ndarray):
-            return hashlib.md5(obj.tobytes()).hexdigest() # type: ignore
+            return hashlib.md5(obj.tobytes()).hexdigest()
     except ImportError:
         pass
     try:
@@ -36,6 +36,7 @@ def _hash_input(obj: Any) -> str:
         return hashlib.md5(raw).hexdigest()
     except Exception:
         return hashlib.md5(str(obj).encode()).hexdigest()
+
 
 def _resolve_store(store):
     """Return the store to use: explicit store > global default > new default."""
@@ -50,6 +51,7 @@ def _resolve_store(store):
     # Fallback: create a new store at the default path.
     # This preserves v0.1 behaviour for scripts that never call dlm.init().
     return LineageStore()
+
 
 def track(
     name: Optional[str] = None,
@@ -138,13 +140,22 @@ def track(
                     )
 
             return result
+
+        # Store track metadata on the wrapper so CounterfactualReplayer
+        # can read it via register_tracked() without re-specifying args.
+        wrapper.__track_meta__ = { # type: ignore
+            "name":           step_name,
+            "snapshot":       snapshot,
+            "sensitive_cols": sensitive_cols,
+        }
         return wrapper
     return decorator
+
 
 def _log_snapshot_safe(store, run_id, step_name, position,
                         args, kwargs, sensitive_cols):
     """Attempt to log a DataFrame snapshot using DataFrameProfiler.
- 
+
     Fails silently — snapshots must never break a production pipeline.
     The actual computation is delegated to DataFrameProfiler so the
     logic lives in one place and can be tested independently.
@@ -152,7 +163,7 @@ def _log_snapshot_safe(store, run_id, step_name, position,
     try:
         import pandas as pd
         from datalineageml.analysis.profiler import DataFrameProfiler
- 
+
         # Find the first DataFrame in the arguments
         df = None
         for a in list(args) + list(kwargs.values()):
@@ -161,12 +172,12 @@ def _log_snapshot_safe(store, run_id, step_name, position,
                 break
         if df is None:
             return  # no DataFrame argument — nothing to snapshot
- 
+
         profiler = DataFrameProfiler(sensitive_cols=sensitive_cols)
         snapshot = profiler.profile(df, step_name=step_name,
                                     position=position, run_id=run_id)
         store.log_snapshot(**snapshot)
- 
+
     except Exception:
         # Snapshots are best-effort — never let them break the pipeline
         pass

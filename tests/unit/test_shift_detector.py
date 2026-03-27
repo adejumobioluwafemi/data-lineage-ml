@@ -54,7 +54,7 @@ def _log_oyo_pair(store):
               {"F": 0.22, "M": 0.78}, 290)
 
 
-# Jensen-Shannon divergence
+# ── Jensen-Shannon divergence
 
 def test_jsd_identical_distributions_is_zero():
     dist = {"F": 0.4, "M": 0.6}
@@ -118,7 +118,7 @@ def _jensen_shan_divergence_safe(p, q):
     return _jensen_shannon_divergence(p, q)
 
 
-# ShiftDetector.detect() 
+# ── ShiftDetector.detect()
 
 def test_detect_returns_list(store):
     _log_oyo_pair(store)
@@ -141,7 +141,7 @@ def test_detect_result_has_required_fields(store):
     results  = detector.detect()
     assert len(results) > 0
     r = results[0]
-    required = {"step_name", "column", "js_divergence", "flag",
+    required = {"step_name", "column", "stat", "test", "flag",
                 "before_dist", "after_dist", "rows_before", "rows_after",
                 "rows_removed", "removal_rate", "finding"}
     assert required.issubset(r.keys())
@@ -157,7 +157,7 @@ def test_detect_sorted_by_jsd_descending(store):
     detector = ShiftDetector(store=store)
     results  = detector.detect()
 
-    jsds = [r["js_divergence"] for r in results]
+    jsds = [r["stat"] for r in results]
     assert jsds == sorted(jsds, reverse=True), "Results not sorted by JSD descending"
 
 
@@ -233,12 +233,12 @@ def test_detect_step_names_filter(store):
     assert step_names == {"clean_data"}
 
 
-# ShiftDetector flagging
+# ── ShiftDetector flagging
 
 def test_flag_high_above_threshold(store):
     _log_snap(store, "s", "before", {"F": 0.5, "M": 0.5}, 100)
     _log_snap(store, "s", "after",  {"F": 0.1, "M": 0.9}, 80)
-    detector = ShiftDetector(store=store, high_threshold=0.05) # type: ignore
+    detector = ShiftDetector(store=store, jsd_high=0.05)
     results  = detector.detect()
     assert results[0]["flag"] == "HIGH"
 
@@ -254,13 +254,13 @@ def test_flag_low_for_near_identical(store):
 def test_custom_thresholds_respected(store):
     # With very high thresholds, even Oyo-level shift should be LOW
     _log_oyo_pair(store)
-    detector = ShiftDetector(store=store, high_threshold=0.99, # type: ignore
-                             medium_threshold=0.50) # type: ignore
+    detector = ShiftDetector(store=store, jsd_high=0.99,
+                             jsd_medium=0.50)
     results  = detector.detect()
     assert results[0]["flag"] == "LOW"
 
 
-# finding text
+# ── finding text
 
 def test_finding_mentions_step_name(store):
     _log_oyo_pair(store)
@@ -291,7 +291,7 @@ def test_finding_low_does_not_flag_candidate(store):
     assert "candidate" not in results[0]["finding"].lower()
 
 
-# top_candidate 
+# ── top_candidate
 
 def test_top_candidate_returns_highest_jsd(store):
     _log_oyo_pair(store)
@@ -311,7 +311,7 @@ def test_top_candidate_empty_results_returns_none(store):
     assert detector.top_candidate([]) is None
 
 
-# print_report
+# ── print_report 
 
 def test_print_report_no_error(store):
     _log_oyo_pair(store)
@@ -342,7 +342,7 @@ def test_print_report_empty_results_no_error(store):
     assert "No paired snapshots" in cap.getvalue()
 
 
-# integration: profiler + store + detector
+# ── integration: profiler + store + detector
 
 def test_full_integration_oyo_scenario(store):
     """End-to-end: profile a real DataFrame, store snapshots, detect shift."""
@@ -385,5 +385,5 @@ def test_full_integration_oyo_scenario(store):
     assert top["step_name"] == "clean_data" # type: ignore
     assert top["column"]    == "gender" # type: ignore
     assert top["flag"]      == "HIGH" # type: ignore
-    assert top["js_divergence"] > 0.02 # type: ignore
+    assert top["stat"] > 0.02 # type: ignore
     assert "candidate causal" in top["finding"].lower() # type: ignore

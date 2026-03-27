@@ -35,6 +35,8 @@ __version__ = "0.2.0"
 __author__ = "Oluwafemi Adejumobi"
 
 from .trackers.decorator import track
+from .replay.replayer import CounterfactualReplayer
+from .report import generate_report
 from .trackers.context import LineageContext
 from .storage.sqlite_store import LineageStore
 from .visualization.graph import LineageGraph
@@ -93,6 +95,8 @@ def reset() -> None:
 
 __all__ = [
     "track",
+    "CounterfactualReplayer",
+    "generate_report",
     "LineageContext",
     "LineageStore",
     "LineageGraph",

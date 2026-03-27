@@ -3,7 +3,7 @@ Tests for the @track decorator.
 Run with: python run_tests.py  OR  pytest tests/unit/test_decorator.py -v
 """
 
-import pytest # type: ignore
+import pytest
 import json
 import time
 import tempfile
@@ -19,8 +19,6 @@ def store(tmp_path):
     yield s
     s.close()
 
-
-# ── ORIGINAL 11 DECORATOR TESTS (unchanged) ───────────────────────────────────
 
 def test_track_logs_successful_step(store):
     @track(name="add_numbers", store=store)
@@ -127,7 +125,7 @@ def test_different_data_produces_different_hash(store):
     assert h1 != h2
 
 
-# ── NEW: SNAPSHOT INTEGRATION TESTS ──────────────────────────────────────────
+# SNAPSHOT INTEGRATION TESTS 
 
 def test_snapshot_true_logs_before_and_after(store):
     import pandas as pd
@@ -236,3 +234,69 @@ def test_snapshot_linked_to_correct_run_id(store):
     snaps = store.get_snapshots()
     for snap in snaps:
         assert snap["run_id"] == step["run_id"]
+
+
+# __track_meta__ and register_tracked 
+
+def test_track_meta_stored_on_wrapper(store):
+    @track(name="my_step", snapshot=True, sensitive_cols=["gender"],
+           store=store)
+    def my_step(df): return df
+    assert hasattr(my_step, "__track_meta__")
+    assert my_step.__track_meta__["name"] == "my_step"
+    assert my_step.__track_meta__["snapshot"] is True
+    assert my_step.__track_meta__["sensitive_cols"] == ["gender"]
+
+
+def test_track_meta_name_defaults_to_function_name(store):
+    @track(store=store)   # no name= given
+    def my_function(x): return x
+    assert my_function.__track_meta__["name"] == "my_function"
+
+
+def test_track_meta_snapshot_default_false(store):
+    @track(name="s", store=store)
+    def fn(x): return x
+    assert fn.__track_meta__["snapshot"] is False
+
+
+def test_register_tracked_extracts_name():
+    from datalineageml.replay import CounterfactualReplayer
+    @track(name="load_step", snapshot=False)
+    def load_step(df): return df.copy()
+    r = CounterfactualReplayer()
+    r.register_tracked(load_step)
+    assert r._steps[0]["name"] == "load_step"
+
+
+def test_register_tracked_extracts_snapshot():
+    from datalineageml.replay import CounterfactualReplayer
+    @track(name="clean", snapshot=True, sensitive_cols=["gender"])
+    def clean(df): return df.dropna()
+    r = CounterfactualReplayer()
+    r.register_tracked(clean)
+    assert r._steps[0]["snapshot"] is True
+    assert r._steps[0]["sensitive_cols"] == ["gender"]
+
+
+def test_register_tracked_untracked_fn_uses_fn_name():
+    from datalineageml.replay import CounterfactualReplayer
+    def plain_fn(df): return df   # not decorated with @track
+    r = CounterfactualReplayer()
+    r.register_tracked(plain_fn)
+    assert r._steps[0]["name"] == "plain_fn"
+    assert r._steps[0]["snapshot"] is False
+
+
+def test_register_tracked_chaining():
+    from datalineageml.replay import CounterfactualReplayer
+    @track(name="step_a")
+    def step_a(df): return df
+    @track(name="step_b")
+    def step_b(df): return df
+    r = (CounterfactualReplayer()
+         .register_tracked(step_a)
+         .register_tracked(step_b))
+    assert len(r._steps) == 2
+    assert r._steps[0]["name"] == "step_a"
+    assert r._steps[1]["name"] == "step_b"
